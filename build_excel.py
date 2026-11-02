@@ -224,7 +224,7 @@ ws3 = wb.create_sheet("Расчёт")
 
 ws3["A1"] = "Потери давления на участке трубы (вода) — расчёт по температурам"
 ws3["A1"].font = F_TITLE
-ws3.merge_cells("A1:N1")
+ws3.merge_cells("A1:O1")
 
 ws3["A2"] = ('=" Исходные данные:  d = "&d_mm&" мм;   k = "&k_mm&" мм;   режим: "&Regim'
              '&";   Q* = "&ROUND(Q_used,3)&" м³/ч;   v* = "&ROUND(v_used,3)&" м/с;   '
@@ -237,6 +237,7 @@ props = [
     ("v", "м/с"),       ("Re", "—"),        ("k/d", "—"),
     ("lambda", "—"),    ("R", "Па/м"),      ("dP", "кПа"),   ("dH", "м вод. ст."),
     ("lam_cw1", "—"),   ("lam_cw2", "—"),   ("lam_cw3", "—"), ("d_lam", "%"),
+    ("d_R", "Па/м"),
 ]
 # строка 3 — названия, строка 4 — единицы
 for j, (name, unit) in enumerate(props, start=1):
@@ -252,7 +253,8 @@ titles = ["T", "Плотность ρ", "Вязкость ν", "Скорость
           "Отн. шероховатость k/d", "Коэффициент трения λ", "Удельная потеря R",
           "Потеря давления Δp", "Потеря напора Δh",
           "λ Колбрука (ит. 1)", "λ Колбрука (ит. 2)", "λ Колбрука (ит. 3)",
-          "Разность λ (Альтшуль vs Колбрук)"]
+          "Разность λ (Альтшуль vs Колбрук)",
+          "Δ R (Альтшуль − Колбрук)"]
 for j, t in enumerate(titles, start=1):
     ws3.cell(row=3, column=j, value=t).font = F_HEAD
 
@@ -275,28 +277,35 @@ formulas = {
     "L": f"=IF(E{{r}}<=2300,64/E{{r}},(1/(-2*LOG10(k_mm/(3.7*d_mm)+2.51/(E{{r}}*SQRT(K{{r}})))))^2)",
     "M": f"=IF(E{{r}}<=2300,64/E{{r}},(1/(-2*LOG10(k_mm/(3.7*d_mm)+2.51/(E{{r}}*SQRT(L{{r}})))))^2)",
     "N": "=(G{r}-M{r})/M{r}",
+    # разность удельных потерь в Па/м: Альтшуль минус Колбрук
+    "O": f"=(G{{r}}-M{{r}})/{DM}*(B{{r}}*D{{r}}^2)/2",
 }
 numfmt = {
     "A": "0",    "B": "0.00", "C": "0.0000E+00", "D": "0.000",
     "E": "0",    "F": "0.00000", "G": "0.0000", "H": "0",
     "I": "0.00", "J": "0.000", "K": "0.0000", "L": "0.0000",
     "M": "0.0000", "N": "0.0%",
+    "O": "0",
 }
 
 for i in range(N_RES):
     r = 5 + i                 # строка на листе «Расчёт»
     sr = RES_ROW0 + i         # строка на листе «Свойства воды»
     ws3.cell(row=r, column=1, value=WATER[i][0]).fill = FILL_T
-    for col in "ABCDEFGHIJKLMN":
+    for col in "ABCDEFGHIJKLMNO":
         cell = ws3[f"{col}{r}"]
         if col == "A":
             continue  # уже записано
         cell.value = formulas[col].format(r=r, sr=sr)
-    for col in "ABCDEFGHIJKLMN":
+    for col in "ABCDEFGHIJKLMNO":
         cell = ws3[f"{col}{r}"]
         cell.number_format = numfmt[col]
         cell.alignment = C
         cell.border = B_ALL
+
+# скрываем промежуточные итерации Колбрука
+for c in ("K", "L", "M"):
+    ws3.column_dimensions[c].hidden = True
 
 tot = ws3.cell(row=5 + N_RES, column=1,
                value="min/max Δp по диапазону")
@@ -306,7 +315,7 @@ ws3[f"I{5 + N_RES}"].font = F_NOTE
 
 widths = {"A": 6, "B": 11, "C": 13, "D": 9, "E": 10, "F": 9,
           "G": 11, "H": 12, "I": 12, "J": 13,
-          "K": 12, "L": 12, "M": 12, "N": 13}
+          "K": 12, "L": 12, "M": 12, "N": 13, "O": 14}
 for col, w in widths.items():
     ws3.column_dimensions[col].width = w
 ws3.freeze_panes = "A5"
