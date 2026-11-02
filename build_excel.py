@@ -174,6 +174,8 @@ for rr in (12, 13):
 for name, cell in (("Fluid", "$C$3"), ("d_mm", "$C$4"), ("k_mm", "$C$5"),
                    ("Q_m3h", "$C$6"), ("Q_lmin", "$C$7"), ("v_ms", "$C$8"),
                    ("Regim", "$C$9"), ("L_m", "$C$10"),
+                   ("step_mm", "$C$24"), ("dT_K", "$C$25"), ("Tavg", "$C$26"),
+                   ("step_i", "$C$27"), ("step_j", "$C$28"), ("step_f", "$C$29"),
                    ("Q_used", "$C$12"), ("v_used", "$C$13")):
     wb.defined_names.add(DefinedName(name, attr_text=f"Ввод!{cell}"))
 
@@ -208,6 +210,28 @@ dv_fluid = DataValidation(type="list", formula1=f'"{FLUID_W},{FLUID_PG}"',
 dv_fluid.add("C3")
 ws1.add_data_validation(dv_fluid)
 
+dv_step = DataValidation(type="decimal", operator="greaterThan", formula1="0",
+                         allow_blank=False, showErrorMessage=True,
+                         errorTitle="Ошибка ввода",
+                         error="Шаг укладки должен быть положительным.")
+dv_step.add("C24")
+ws1.add_data_validation(dv_step)
+
+dv_dt = DataValidation(type="decimal", operator="greaterThanOrEqual", formula1="0.1",
+                       allow_blank=False, showErrorMessage=True,
+                       errorTitle="Ошибка ввода",
+                       error="Перепад температуры должен быть > 0.")
+dv_dt.add("C25")
+ws1.add_data_validation(dv_dt)
+
+dv_tavg = DataValidation(type="decimal", operator="between",
+                         formula1="-20", formula2="80",
+                         allow_blank=False, showErrorMessage=True,
+                         errorTitle="Ошибка ввода",
+                         error="Средняя температура должна быть в диапазоне −20…+80 °C.")
+dv_tavg.add("C26")
+ws1.add_data_validation(dv_tavg)
+
 # подсветка неиспользуемой ячейки (серым)
 ws1.conditional_formatting.add(
     "C6", FormulaRule(formula=[f'$C$9<>"{MODE_Q}"'], fill=FILL_OFF, font=F_OFF))
@@ -229,6 +253,69 @@ ws1["A21"] = "• результат — лист «Расчёт»: потери
 for r in range(16, 22):
     ws1[f"A{r}"].font = F_NOTE
 
+# --- Блок прикидочной оценки: тёплый пол / снеготаяние -------------------
+ws1["A23"] = "Оценка теплоотдачи: тёплый пол / снеготаяние (прикидка)"
+ws1["A23"].font = F_TITLE
+
+blk = [
+    ("Шаг укладки трубы s", 200, "мм", "расстояние между соседними трубами контура"),
+    ("Перепад температуры ΔT", 10, "°C", "подача − обратка в контуре"),
+    ("Средняя температура Tср", 35, "°C", "свойства теплоносителя берутся при этой температуре"),
+    ("служебное: индекс i", None, "", ""),
+    ("служебное: индекс j", None, "", ""),
+    ("служебное: доля f", None, "", ""),
+    ("Площадь контура S", None, "м²", "примерена по длине и шагу; S = L / (s/1000)"),
+    ("Теплоёмкость cp", None, "Дж/(кг·К)", "линейная интерполяция таблицы при Tср (см. лист «Свойства воды»)"),
+    ("Плотность rho", None, "кг/м³", "линейная интерполяция таблицы при Tср"),
+    ("Теплоотдача F", None, "Вт", "F = cp·rho·Q*(м³/ч)/3600·dt"),
+    ("Уд. теплоотдача, на площадь", None, "Вт/м²", "F / S"),
+    ("Уд. теплоотдача, на метр трубы", None, "Вт/м", "F / L"),
+]
+blk_row0 = 24
+for i, (label, val, unit, note) in enumerate(blk):
+    r = blk_row0 + i
+    ws1[f"A{r}"] = label
+    ws1[f"A{r}"].font = F_NOTE if label.startswith("служебное") else F_LABEL
+    if val is not None:
+        ws1[f"C{r}"] = val
+        ws1[f"C{r}"].font = F_INPUT
+        ws1[f"C{r}"].fill = FILL_INP
+    ws1[f"C{r}"].alignment = C
+    ws1[f"D{r}"] = unit
+    ws1[f"D{r}"].font = F_UNIT
+    ws1[f"E{r}"] = note
+    ws1[f"E{r}"].font = F_NOTE
+
+FL = "Свойства воды"
+
+def _interp(col, idx_i="$C$27", idx_j="$C$28", frac="$C$29"):
+    lo = f"INDEX('{FL}'!${col}$5:${col}$25,{idx_i})"
+    hi = f"INDEX('{FL}'!${col}$5:${col}$25,{idx_j})"
+    return f"{lo}+{frac}*({hi}-{lo})"
+
+# служебные величины (строки 27-29): i = строка ниже (или равная) Tср
+ws1["C27"] = "=MIN(21,MAX(1,INT(($C$26+20)/5)+1))"
+ws1["C28"] = "=MIN(21,C27+1)"
+ws1["C29"] = "=IF(C27>=21,0,($C$26+20)/5+1-C27)"
+for addr in ("C27", "C28", "C29"):
+    ws1[addr].number_format = "0.000"
+    ws1[addr].font = F_NOTE
+
+# расчётные формулы блока
+ws1["C30"] = "=L_m*1000/C24"                       # площадь, м²
+ws1["C31"] = (f'=IF($C$3="{FLUID_PG}",{_interp("I")},'
+              f'IF($C$26<5,"н/д (вода при T<5 °C)",{_interp("H")}))')
+ws1["C32"] = (f'=IF($C$3="{FLUID_PG}",{_interp("D")},'
+              f'IF($C$26<5,"н/д (вода при T<5 °C)",{_interp("B")}))')
+ws1["C33"] = '=IFERROR(C31*C32*Q_used/3600*C25,"н/д")'
+ws1["C34"] = '=IFERROR(C33/C30,"н/д")'
+ws1["C35"] = '=IFERROR(C33/L_m,"н/д")'
+for r in range(30, 36):
+    ws1[f"C{r}"].alignment = C
+    ws1[f"C{r}"].border = B_ALL
+    ws1[f"C{r}"].number_format = {30: "0.00", 31: "0.0", 32: "0.0",
+                                  33: "0", 34: "0.00", 35: "0.00"}[r]
+
 ws1.column_dimensions["A"].width = 32
 ws1.column_dimensions["C"].width = 12
 ws1.column_dimensions["D"].width = 10
@@ -239,14 +326,15 @@ ws1.column_dimensions["E"].width = 70
 ws2 = wb.create_sheet("Свойства воды")
 ws2["A1"] = "Свойства теплоносителей при атмосферном давлении"
 ws2["A1"].font = F_TITLE
-ws2.merge_cells("A1:G1")
+ws2.merge_cells("A1:I1")
 ws2["A2"] = ("Вода: IAPWS (T ≥ 5 °C, ниже — лёд).  ПГ 40%: данные KasperCalc/Dow "
              "(интерполяция к шагу 5 °C), кристаллизация ≈ −24 °C.")
 ws2["A2"].font = F_NOTE
 
 hdr = ["T, °C", "rho воды, кг/м³", "nu воды, мм²/с",
        "rho ПГ 40%, кг/м³", "nu ПГ 40%, мм²/с",
-       "rho* (расч.), кг/м³", "nu* (расч.), м²/с"]
+       "rho* (расч.), кг/м³", "nu* (расч.), м²/с",
+       "cp воды, Дж/(кг·К)", "cp ПГ 40%, Дж/(кг·К)"]
 for j, h in enumerate(hdr):
     c = ws2.cell(row=4, column=1 + j, value=h)
     c.font = F_HEAD
@@ -273,15 +361,24 @@ for i in range(N_RES):
     ws2.cell(row=r, column=7,
              value=f'=IF(Fluid="{FLUID_W}",C{r},E{r})*0.000001'
              ).number_format = "0.0000E+00"
-    for j in range(1, 8):
+    # cp: аппроксимации для прикидочных расчётов (см. Примечания)
+    ws2.cell(row=r, column=8,
+             value=f"=4178.8+0.01016*(A{r}-37.5)^2").number_format = "0.0"
+    ws2.cell(row=r, column=9,
+             value=f"=3560+2.8*A{r}").number_format = "0.0"
+    for j in range(1, 10):
         cell = ws2.cell(row=r, column=j)
         cell.alignment = C
-        cell.border = B_ALL
+        if j <= 6:
+            cell.border = B_ALL
 
 ws2["A28"] = ("Выбор теплоносителя — ячейка «Теплоноситель» на листе «Ввод»; "
-              "колонки rho*/nu* — то, что реально идёт в расчёт.")
+              "колонки rho*/nu* — то, что реально идёт в расчёт гидравлики.")
+ws2["A29"] = ("cp — теплоёмкость, аппроксимация: вода 4178.8+0.01016·(T−37.5)² (точность ~0.5% "
+              "в диапазоне 5…80 °C), ПГ 40% ≈ 3560+2.8·T (точность ~1%, взять данные "
+              "производителя для точного расчёта).")
 
-for col, w in zip("ABCDEFG", (8, 13, 13, 14, 14, 15, 15)):
+for col, w in zip("ABCDEFGHI", (8, 13, 13, 14, 14, 15, 15, 16, 17)):
     ws2.column_dimensions[col].width = w
 ws2.freeze_panes = "A5"
 
@@ -449,6 +546,16 @@ lines = [
     "• при малых Re формула Альтшуля плавно переходит в зависимость для гладких труб (Блазиус);",
     "• все вычисления — формулами Excel: изменение исходных данных на листе «Ввод»",
     "  пересчитывает таблицу автоматически.",
+    "",
+    "6. Блок «Оценка теплоотдачи (тёплый пол / снеготаяние)» — лист «Ввод», строки 24-35:",
+    "   • площадь контура:      S = L / (s/1000)   [м²]  (s — шаг укладки в мм)",
+    "   • массовый расход:      m = rho·Q*/3600    [кг/с]  (Q* — объёмный расход по выбранному режиму)",
+    "   • теплоотдача:          F = cp·m·ΔT        [Вт]  (cp и rho берутся при средней температуре,",
+    "     линейная интерполяция таблицы свойств)",
+    "   • удельные показатели:  F/S [Вт/м²] и F/L [Вт/м трубы]",
+    "   Блок прикидочный: cp — аппроксимации (вода ~0.5%, ПГ ~1%); не заменяет",
+    "   полноценный расчёт теплоотдачи теплотехникой (Stanton/поверхностные",
+    "   эффекты стяжки, напольное покрытие и т.п. в нём не учтены).",
 ]
 for i, s in enumerate(lines):
     cell = ws4.cell(row=2 + i, column=1, value=s if s else None)
