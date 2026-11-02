@@ -110,6 +110,7 @@ FILL_OFF = PatternFill("solid", fgColor="E0E0E0")   # серый — неисп�
 F_OFF    = Font(size=11, italic=True, color="909090")
 
 MODE_Q  = "Расход (Q)"
+MODE_L  = "Расход (л/мин)"
 MODE_V  = "Скорость (v)"
 
 FLUID_W  = "Вода"
@@ -124,10 +125,12 @@ rows = [
      "нерж. сталь ~0.02-0.05; сталь новая ~0.05-0.1; сталь б/у 0.1-0.3; чугун ~0.3-0.5"),
     ("Расход воды Q", 5.0, "м³/ч",
      "используется, если режим = «Расход (Q)»"),
+    ("Расход воды Ql", None, "л/мин",
+     "используется, если режим = «Расход (л/мин)»; 1 л/мин = 0.06 м³/ч"),
     ("Скорость воды v", None, "м/с",
      "используется, если режим = «Скорость (v)»; при пустой ячейке задайте значение"),
     ("РЕЖИМ ЗАДАНИЯ", MODE_Q, "—",
-     "выберите из списка: задавать расход Q или скорость v"),
+     "выберите из списка: задавать расход Q (м³/ч), расход Ql (л/мин) или скорость v"),
     ("Длина участка L", 100.0, "м", "полная длина прямого участка"),
 ]
 # строки 3..9: теплоноситель, d, k, Q, v, режим, L
@@ -150,12 +153,15 @@ ws1["A11"] = "Расчётные (используемые в таблице) з
 ws1["A11"].font = F_LABEL
 ws1["A12"] = "• расход  Q*"
 ws1["C12"] = (f'=IF(Regim="{MODE_Q}",Q_m3h,'
-              '3600*v_ms*(PI()*(d_mm/1000)^2/4))')
+              f'IF(Regim="{MODE_L}",Q_lmin/60,'
+              '3600*v_ms*(PI()*(d_mm/1000)^2/4)))')
 ws1["D12"] = "м³/ч"
 ws1["A13"] = "• скорость v*"
 ws1["C13"] = (f'=IF(Regim="{MODE_Q}",'
               'Q_m3h/3600/(PI()*(d_mm/1000)^2/4),'
-              'v_ms)')
+              f'IF(Regim="{MODE_L}",'
+              '(Q_lmin/60000)/(PI()*(d_mm/1000)^2/4),'
+              'v_ms))')
 ws1["D13"] = "м/с"
 for rr in (12, 13):
     ws1[f"A{rr}"].font = F_LABEL
@@ -164,10 +170,11 @@ for rr in (12, 13):
     ws1[f"C{rr}"].border = B_ALL
     ws1[f"D{rr}"].font = F_UNIT
 
-# именованные диапазоны
+# именованные диапазоны (строки 3..10: теплоноситель, d, k, Q, Ql, v, режим, L)
 for name, cell in (("Fluid", "$C$3"), ("d_mm", "$C$4"), ("k_mm", "$C$5"),
-                   ("Q_m3h", "$C$6"), ("v_ms", "$C$7"), ("Regim", "$C$8"),
-                   ("L_m", "$C$9"), ("Q_used", "$C$12"), ("v_used", "$C$13")):
+                   ("Q_m3h", "$C$6"), ("Q_lmin", "$C$7"), ("v_ms", "$C$8"),
+                   ("Regim", "$C$9"), ("L_m", "$C$10"),
+                   ("Q_used", "$C$12"), ("v_used", "$C$13")):
     wb.defined_names.add(DefinedName(name, attr_text=f"Ввод!{cell}"))
 
 # валидация ввода
@@ -175,7 +182,7 @@ dv_pos = DataValidation(type="decimal", operator="greaterThan", formula1="0",
                         allow_blank=False, showErrorMessage=True,
                         errorTitle="Ошибка ввода",
                         error="Значение должно быть положительным числом.")
-for addr in ("C4", "C6", "C7", "C9"):
+for addr in ("C4", "C6", "C7", "C8", "C10"):
     dv_pos.add(addr)
 ws1.add_data_validation(dv_pos)
 
@@ -186,11 +193,12 @@ dv_nonneg = DataValidation(type="decimal", operator="greaterThanOrEqual", formul
 dv_nonneg.add("C5")
 ws1.add_data_validation(dv_nonneg)
 
-dv_mode = DataValidation(type="list", formula1=f'"{MODE_Q},{MODE_V}"',
+dv_mode = DataValidation(type="list",
+                         formula1=f'"{MODE_Q},{MODE_L},{MODE_V}"',
                          allow_blank=False, showErrorMessage=True,
                          errorTitle="Ошибка режима",
                          error="Выберите вариант из списка.")
-dv_mode.add("C8")
+dv_mode.add("C9")
 ws1.add_data_validation(dv_mode)
 
 dv_fluid = DataValidation(type="list", formula1=f'"{FLUID_W},{FLUID_PG}"',
@@ -202,14 +210,17 @@ ws1.add_data_validation(dv_fluid)
 
 # подсветка неиспользуемой ячейки (серым)
 ws1.conditional_formatting.add(
-    "C6", FormulaRule(formula=[f'$C$8<>"{MODE_Q}"'], fill=FILL_OFF, font=F_OFF))
+    "C6", FormulaRule(formula=[f'$C$9<>"{MODE_Q}"'], fill=FILL_OFF, font=F_OFF))
 ws1.conditional_formatting.add(
-    "C7", FormulaRule(formula=[f'$C$8="{MODE_Q}"'], fill=FILL_OFF, font=F_OFF))
+    "C7", FormulaRule(formula=[f'$C$9<>"{MODE_L}"'], fill=FILL_OFF, font=F_OFF))
+ws1.conditional_formatting.add(
+    "C8", FormulaRule(formula=[f'$C$9<>"{MODE_V}"'], fill=FILL_OFF, font=F_OFF))
 
 ws1["A15"] = "Примечания:"
 ws1["A16"] = "• жёлтые ячейки — редактируемые исходные данные;"
-ws1["A17"] = ('• режим задаёт, что вводить: расход Q (м³/ч) или скорость v (м/с); '
-              'неиспользуемая ячейка серееет автоматически, заполнять её не надо;')
+ws1["A17"] = ('• режим задаёт, что вводить: расход Q (м³/ч), расход Ql (л/мин) или '
+              'скорость v (м/с); неиспользуемые ячейки сереют автоматически, '
+              'заполнять надо только ту, что соответствует выбранному режиму;')
 ws1["A18"] = "• серые ячейки Q* и v* — вычисляемые (то, что реально пойдёт в таблицу);"
 ws1["A19"] = "• шероховатость — эквивалентная (по состоянию трубы);"
 ws1["A20"] = ('• теплоноситель: «Вода» (свойства IAPWS, T ≥ 5 °C) или «ПГ 40%» '
@@ -389,8 +400,10 @@ ws4["A1"].font = F_TITLE
 lines = [
     "",
     "0. Режим задания режима потока:",
-    "   • «Расход (Q)» — в таблице используется введённый расход Q, м³/ч,",
+    "   • «Расход (Q)» — используется введённый расход Q, м³/ч,",
     "     скорость вычисляется: v = Q / (3600 · f), где f = π·d²/4 — площадь сечения;",
+    "   • «Расход (л/мин)» — используется введённый расход Ql, л/мин:",
+    "     Q = Ql / 60 (м³/ч), v = (Ql/60000) / f;",
     "   • «Скорость (v)» — используется введённая скорость v, м/с,",
     "     расход вычисляется: Q = 3600 · v · f.",
     "   Выбор — ячейка «РЕЖИМ ЗАДАНИЯ» на листе «Ввод» (выпадающий список);",
