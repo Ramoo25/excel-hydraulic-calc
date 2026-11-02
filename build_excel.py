@@ -20,6 +20,7 @@ build_excel.py — генератор hydr_calc.xlsx
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.formatting.rule import FormulaRule
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
 
@@ -76,19 +77,32 @@ ws1["A1"] = "Ввод исходных данных"
 ws1["A1"].font = F_TITLE
 ws1.merge_cells("A1:E1")
 
+FILL_OFF = PatternFill("solid", fgColor="E0E0E0")   # серый — неиспользуемая ячейка
+F_OFF    = Font(size=11, italic=True, color="909090")
+
+MODE_Q  = "Расход (Q)"
+MODE_V  = "Скорость (v)"
+
 rows = [
     ("Внутренний диаметр трубы d", 50.0, "мм",
      "внутренний (проходной) диаметр"),
     ("Эквивалентная шероховатость k", 0.1, "мм",
      "нерж. сталь ~0.02-0.05; сталь новая ~0.05-0.1; сталь б/у 0.1-0.3; чугун ~0.3-0.5"),
-    ("Расход воды Q", 5.0, "м³/ч", "объёмный расход"),
+    ("Расход воды Q", 5.0, "м³/ч",
+     "используется, если режим = «Расход (Q)»"),
+    ("Скорость воды v", None, "м/с",
+     "используется, если режим = «Скорость (v)»; при пустой ячейке задайте значение"),
+    ("РЕЖИМ ЗАДАНИЯ", MODE_Q, "—",
+     "выберите из списка: задавать расход Q или скорость v"),
     ("Длина участка L", 100.0, "м", "полная длина прямого участка"),
 ]
+# строки 4..9: d, k, Q, v, режим, L
 for i, (label, val, unit, note) in enumerate(rows):
     r = 4 + i
     ws1[f"A{r}"] = label
     ws1[f"A{r}"].font = F_LABEL
-    ws1[f"C{r}"] = val
+    if val is not None:
+        ws1[f"C{r}"] = val
     ws1[f"C{r}"].font = F_INPUT
     ws1[f"C{r}"].fill = FILL_INP
     ws1[f"C{r}"].alignment = C
@@ -98,9 +112,28 @@ for i, (label, val, unit, note) in enumerate(rows):
     ws1[f"E{r}"] = note
     ws1[f"E{r}"].font = F_NOTE
 
+ws1["A11"] = "Расчётные (используемые в таблице) значения:"
+ws1["A11"].font = F_LABEL
+ws1["A12"] = "• расход  Q*"
+ws1["C12"] = (f'=IF(Regim="{MODE_Q}",Q_m3h,'
+              '3600*v_ms*(PI()*(d_mm/1000)^2/4))')
+ws1["D12"] = "м³/ч"
+ws1["A13"] = "• скорость v*"
+ws1["C13"] = (f'=IF(Regim="{MODE_Q}",'
+              'Q_m3h/3600/(PI()*(d_mm/1000)^2/4),'
+              'v_ms)')
+ws1["D13"] = "м/с"
+for rr in (12, 13):
+    ws1[f"A{rr}"].font = F_LABEL
+    ws1[f"C{rr}"].number_format = "0.000"
+    ws1[f"C{rr}"].alignment = C
+    ws1[f"C{rr}"].border = B_ALL
+    ws1[f"D{rr}"].font = F_UNIT
+
 # именованные диапазоны
-for name, cell in (("d_mm", "$C$4"), ("k_mm", "$C$5"),
-                   ("Q_m3h", "$C$6"), ("L_m", "$C$7")):
+for name, cell in (("d_mm", "$C$4"), ("k_mm", "$C$5"), ("Q_m3h", "$C$6"),
+                   ("v_ms", "$C$7"), ("Regim", "$C$8"), ("L_m", "$C$9"),
+                   ("Q_used", "$C$12"), ("v_used", "$C$13")):
     wb.defined_names.add(DefinedName(name, attr_text=f"Ввод!{cell}"))
 
 # валидация ввода
@@ -108,7 +141,8 @@ dv_pos = DataValidation(type="decimal", operator="greaterThan", formula1="0",
                         allow_blank=False, showErrorMessage=True,
                         errorTitle="Ошибка ввода",
                         error="Значение должно быть положительным числом.")
-dv_pos.add("C4"); dv_pos.add("C6"); dv_pos.add("C7")
+for addr in ("C4", "C6", "C7", "C9"):
+    dv_pos.add(addr)
 ws1.add_data_validation(dv_pos)
 
 dv_nonneg = DataValidation(type="decimal", operator="greaterThanOrEqual", formula1="0",
@@ -118,12 +152,28 @@ dv_nonneg = DataValidation(type="decimal", operator="greaterThanOrEqual", formul
 dv_nonneg.add("C5")
 ws1.add_data_validation(dv_nonneg)
 
-ws1["A9"] = "Примечания:"
-ws1["A10"] = "• жёлтые ячейки — редактируемые исходные данные;"
-ws1["A11"] = "• шероховатость — эквивалентная (по состоянию трубы);"
-ws1["A12"] = "• свойства воды — стандартные табличные при атмосферном давлении;"
-ws1["A13"] = "• результат — лист «Расчёт»: потери давления при 5…80 °C."
-for r in range(10, 14):
+dv_mode = DataValidation(type="list", formula1=f'"{MODE_Q},{MODE_V}"',
+                         allow_blank=False, showErrorMessage=True,
+                         errorTitle="Ошибка режима",
+                         error="Выберите вариант из списка.")
+dv_mode.add("C8")
+ws1.add_data_validation(dv_mode)
+
+# подсветка неиспользуемой ячейки (серым)
+ws1.conditional_formatting.add(
+    "C6", FormulaRule(formula=[f'$C$8<>"{MODE_Q}"'], fill=FILL_OFF, font=F_OFF))
+ws1.conditional_formatting.add(
+    "C7", FormulaRule(formula=[f'$C$8="{MODE_Q}"'], fill=FILL_OFF, font=F_OFF))
+
+ws1["A15"] = "Примечания:"
+ws1["A16"] = "• жёлтые ячейки — редактируемые исходные данные;"
+ws1["A17"] = ('• режим задаёт, что вводить: расход Q (м³/ч) или скорость v (м/с); '
+              'неиспользуемая ячейка серееет автоматически, заполнять её не надо;')
+ws1["A18"] = "• серые ячейки Q* и v* — вычисляемые (то, что реально пойдёт в таблицу);"
+ws1["A19"] = "• шероховатость — эквивалентная (по состоянию трубы);"
+ws1["A20"] = "• свойства воды — стандартные табличные при атмосферном давлении;"
+ws1["A21"] = "• результат — лист «Расчёт»: потери давления при 5…80 °C."
+for r in range(16, 22):
     ws1[f"A{r}"].font = F_NOTE
 
 ws1.column_dimensions["A"].width = 32
@@ -176,12 +226,9 @@ ws3["A1"] = "Потери давления на участке трубы (во�
 ws3["A1"].font = F_TITLE
 ws3.merge_cells("A1:J1")
 
-ws3["A2"] = ("Исходные данные: d =  мм; k =  мм; Q =  м³/ч; L =  м   "
-             "(см. лист «Ввод», жёлтые ячейки)")
-ws3["A2"].font = F_UNIT
-# динамическая строка исходных данных через формулу
-ws3["A2"] = ('=" Исходные данные:  d = "&d_mm&" мм;   k = "&k_mm&" мм;   '
-             'Q = "&Q_m3h&" м³/ч;   L = "&L_m&" м"')
+ws3["A2"] = ('=" Исходные данные:  d = "&d_mm&" мм;   k = "&k_mm&" мм;   режим: "&Regim'
+             '&";   Q* = "&ROUND(Q_used,3)&" м³/ч;   v* = "&ROUND(v_used,3)&" м/с;   '
+             'L = "&L_m&" м"')
 ws3["A2"].font = F_UNIT
 
 # заголовки (две строки: группа + колонка)
@@ -212,7 +259,7 @@ formulas = {
     "A": "={t}",
     "B": f"='Свойства воды'!B{{sr}}",
     "C": f"='Свойства воды'!C{{sr}}",
-    "D": f"=Q_m3h/3600/(PI()*{DM}^2/4)",
+    "D": "=v_used",
     "E": f"=D{{r}}*{DM}/C{{r}}",
     "F": "=k_mm/d_mm",
     "G": f"=IF(E{{r}}<=2300,64/E{{r}},0.11*(F{{r}}+68/E{{r}})^0.25)",
@@ -261,8 +308,17 @@ ws4["A1"].font = F_TITLE
 
 lines = [
     "",
+    "0. Режим задания режима потока:",
+    "   • «Расход (Q)» — в таблице используется введённый расход Q, м³/ч,",
+    "     скорость вычисляется: v = Q / (3600 · f), где f = π·d²/4 — площадь сечения;",
+    "   • «Скорость (v)» — используется введённая скорость v, м/с,",
+    "     расход вычисляется: Q = 3600 · v · f.",
+    "   Выбор — ячейка «РЕЖИМ ЗАДАНИЯ» на листе «Ввод» (выпадающий список);",
+    "   неиспользуемая из двух ячеек подсвечивается серым автоматически.",
+    "",
     "1. Скорость потока:",
-    "   v = Q / (3600 · f),  где f = π·d²/4 — площадь сечения; d — внутренний диаметр, м",
+    "   f = π·d²/4 — площадь сечения; d — внутренний диаметр, м",
+    "   v* и Q* (расчётные) формируются по выбранному режиму (см. выше).",
     "",
     "2. Число Рейнольдса:",
     "   Re = v · d / ν   (d — м; ν — кинематическая вязкость воды при данной температуре)",
