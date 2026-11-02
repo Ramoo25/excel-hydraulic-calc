@@ -1,0 +1,300 @@
+# -*- coding: utf-8 -*-
+"""
+build_excel.py — генератор hydr_calc.xlsx
+
+Калькулятор потерь давления (Дарси-Вейсбах) на участке трубы с водой
+в диапазоне температур 5..80 °C с шагом 5 °C.
+
+Все расчёты выполняются live-формулами Excel: пользователь меняет ввод на
+листе «Ввод» — таблица пересчитывается.
+
+Методика:
+  v  = Q / (3600 * f),  f = pi*d^2/4
+  Re = v * d_m / nu
+  lambda = 64/Re                      (Re <= 2300, ламинарный)
+  lambda = 0.11*(k/d + 68/Re)^0.25    (Re > 2300, Альтшуль)
+  R  = lambda / d_m * rho * v^2 / 2   [Па/м]
+  dp = R * L                          [кПа]
+  dh = dp_Pa / (rho * g)              [м]
+"""
+
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.workbook.defined_name import DefinedName
+from openpyxl.worksheet.datavalidation import DataValidation
+
+OUT_FILE = "hydr_calc.xlsx"
+
+# Свойства воды при атмосферном давлении: T [°C], rho [кг/м^3], nu [м^2/с]
+# (стандартные табличные значения, IAPWS)
+WATER = [
+    (5,  999.96, 1.5189e-6),
+    (10, 999.70, 1.3069e-6),
+    (15, 999.10, 1.1394e-6),
+    (20, 998.21, 1.0037e-6),
+    (25, 997.05, 0.8927e-6),
+    (30, 995.65, 0.8007e-6),
+    (35, 994.03, 0.7246e-6),
+    (40, 992.22, 0.6579e-6),
+    (45, 990.21, 0.6017e-6),
+    (50, 988.04, 0.5531e-6),
+    (55, 985.69, 0.5102e-6),
+    (60, 983.19, 0.4740e-6),
+    (65, 980.55, 0.4434e-6),
+    (70, 977.76, 0.4131e-6),
+    (75, 974.79, 0.3879e-6),
+    (80, 971.80, 0.3647e-6),
+]
+
+# -------------------------------------------------------------------- стили
+F_TITLE = Font(size=14, bold=True)
+F_HEAD  = Font(size=10, bold=True, color="FFFFFF")
+F_UNIT  = Font(size=9, italic=True, color="555555")
+F_NOTE  = Font(size=9, italic=True, color="777777")
+F_LABEL = Font(size=11)
+F_INPUT = Font(size=11, bold=True)
+
+FILL_HEAD = PatternFill("solid", fgColor="305496")
+FILL_INP  = PatternFill("solid", fgColor="FFF2CC")
+FILL_T    = PatternFill("solid", fgColor="D9E1F2")
+
+THIN  = Side(style="thin", color="B0B0B0")
+B_ALL = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+
+C  = Alignment(horizontal="center", vertical="center")
+CW = Alignment(horizontal="center", vertical="center", wrap_text=True)
+LW = Alignment(horizontal="left", vertical="center", wrap_text=True)
+
+wb = Workbook()
+
+# =================================================================== ЛИСТ 1
+# «Ввод» — исходные данные + именованные ячейки
+ws1 = wb.active
+ws1.title = "Ввод"
+
+ws1["A1"] = "Ввод исходных данных"
+ws1["A1"].font = F_TITLE
+ws1.merge_cells("A1:E1")
+
+rows = [
+    ("Внутренний диаметр трубы d", 50.0, "мм",
+     "внутренний (проходной) диаметр"),
+    ("Эквивалентная шероховатость k", 0.1, "мм",
+     "нерж. сталь ~0.02-0.05; сталь новая ~0.05-0.1; сталь б/у 0.1-0.3; чугун ~0.3-0.5"),
+    ("Расход воды Q", 5.0, "м³/ч", "объёмный расход"),
+    ("Длина участка L", 100.0, "м", "полная длина прямого участка"),
+]
+for i, (label, val, unit, note) in enumerate(rows):
+    r = 4 + i
+    ws1[f"A{r}"] = label
+    ws1[f"A{r}"].font = F_LABEL
+    ws1[f"C{r}"] = val
+    ws1[f"C{r}"].font = F_INPUT
+    ws1[f"C{r}"].fill = FILL_INP
+    ws1[f"C{r}"].alignment = C
+    ws1[f"C{r}"].border = B_ALL
+    ws1[f"D{r}"] = unit
+    ws1[f"D{r}"].font = F_UNIT
+    ws1[f"E{r}"] = note
+    ws1[f"E{r}"].font = F_NOTE
+
+# именованные диапазоны
+for name, cell in (("d_mm", "$C$4"), ("k_mm", "$C$5"),
+                   ("Q_m3h", "$C$6"), ("L_m", "$C$7")):
+    wb.defined_names.add(DefinedName(name, attr_text=f"Ввод!{cell}"))
+
+# валидация ввода
+dv_pos = DataValidation(type="decimal", operator="greaterThan", formula1="0",
+                        allow_blank=False, showErrorMessage=True,
+                        errorTitle="Ошибка ввода",
+                        error="Значение должно быть положительным числом.")
+dv_pos.add("C4"); dv_pos.add("C6"); dv_pos.add("C7")
+ws1.add_data_validation(dv_pos)
+
+dv_nonneg = DataValidation(type="decimal", operator="greaterThanOrEqual", formula1="0",
+                           allow_blank=False, showErrorMessage=True,
+                           errorTitle="Ошибка ввода",
+                           error="Шероховатость не может быть отрицательной.")
+dv_nonneg.add("C5")
+ws1.add_data_validation(dv_nonneg)
+
+ws1["A9"] = "Примечания:"
+ws1["A10"] = "• жёлтые ячейки — редактируемые исходные данные;"
+ws1["A11"] = "• шероховатость — эквивалентная (по состоянию трубы);"
+ws1["A12"] = "• свойства воды — стандартные табличные при атмосферном давлении;"
+ws1["A13"] = "• результат — лист «Расчёт»: потери давления при 5…80 °C."
+for r in range(10, 14):
+    ws1[f"A{r}"].font = F_NOTE
+
+ws1.column_dimensions["A"].width = 32
+ws1.column_dimensions["C"].width = 12
+ws1.column_dimensions["D"].width = 10
+ws1.column_dimensions["E"].width = 70
+
+# =================================================================== ЛИСТ 2
+# «Свойства воды» — справочник rho(T), nu(T)
+ws2 = wb.create_sheet("Свойства воды")
+ws2["A1"] = "Физические свойства воды при атмосферном давлении"
+ws2["A1"].font = F_TITLE
+ws2.merge_cells("A1:C1")
+
+hdr = ["T, °C", "rho, кг/м³", "nu, м²/с", "nu•10⁶, м²/с"]
+for j, h in enumerate(hdr):
+    c = ws2.cell(row=4, column=1 + j, value=h)
+    c.font = F_HEAD
+    c.fill = FILL_HEAD
+    c.alignment = C
+    c.border = B_ALL
+
+for i, (t, rho, nu) in enumerate(WATER):
+    r = 5 + i
+    ws2.cell(row=r, column=1, value=t).fill = FILL_T
+    ws2.cell(row=r, column=2, value=rho).number_format = "0.00"
+    nu_cell = ws2.cell(row=r, column=3, value=nu)
+    nu_cell.number_format = "0.0000E+00"
+    ws2.cell(row=r, column=4, value=f"=C{r}*1E+6").number_format = "0.0000"
+    for j in range(1, 5):
+        cell = ws2.cell(row=r, column=j)
+        cell.alignment = C
+        cell.border = B_ALL
+
+ws2["A22"] = "Источники: стандартные таблицы теплофизических свойств воды (IAPWS)."
+ws2["A22"].font = F_NOTE
+
+RES_ROW0 = 5          # первая строка таблицы свойств (заголовок в строке 4)
+N_RES = len(WATER)    # 16 строк
+
+for col, w in zip("ABCD", (8, 12, 14, 14)):
+    ws2.column_dimensions[col].width = w
+ws2.freeze_panes = "A5"
+
+# =================================================================== ЛИСТ 3
+# «Расчёт» — главная таблица 5…80 °C
+ws3 = wb.create_sheet("Расчёт")
+
+ws3["A1"] = "Потери давления на участке трубы (вода) — расчёт по температурам"
+ws3["A1"].font = F_TITLE
+ws3.merge_cells("A1:J1")
+
+ws3["A2"] = ("Исходные данные: d =  мм; k =  мм; Q =  м³/ч; L =  м   "
+             "(см. лист «Ввод», жёлтые ячейки)")
+ws3["A2"].font = F_UNIT
+# динамическая строка исходных данных через формулу
+ws3["A2"] = ('=" Исходные данные:  d = "&d_mm&" мм;   k = "&k_mm&" мм;   '
+             'Q = "&Q_m3h&" м³/ч;   L = "&L_m&" м"')
+ws3["A2"].font = F_UNIT
+
+# заголовки (две строки: группа + колонка)
+props = [
+    ("T", "°C"),        ("rho", "кг/м³"),   ("nu", "м²/с"),
+    ("v", "м/с"),       ("Re", "—"),        ("k/d", "—"),
+    ("lambda", "—"),    ("R", "Па/м"),      ("dP", "кПа"),   ("dH", "м вод. ст."),
+]
+# строка 3 — названия, строка 4 — единицы
+for j, (name, unit) in enumerate(props, start=1):
+    c3 = ws3.cell(row=3, column=j, value=name)
+    c4 = ws4 = ws3.cell(row=4, column=j, value=unit)
+    for c in (c3, c4):
+        c.font = F_HEAD
+        c.fill = FILL_HEAD
+        c.alignment = CW
+        c.border = B_ALL
+# «человеческие» названия в строке 3
+titles = ["T", "Плотность ρ", "Вязкость ν", "Скорость v", "Рейнольдс Re",
+          "Отн. шероховатость k/d", "Коэффициент трения λ", "Удельная потеря R",
+          "Потеря давления Δp", "Потеря напора Δh"]
+for j, t in enumerate(titles, start=1):
+    ws3.cell(row=3, column=j, value=t).font = F_HEAD
+
+DM = "(d_mm/1000)"   # диаметр в метрах — для краткости формул
+
+formulas = {
+    "A": "={t}",
+    "B": f"='Свойства воды'!B{{sr}}",
+    "C": f"='Свойства воды'!C{{sr}}",
+    "D": f"=Q_m3h/3600/(PI()*{DM}^2/4)",
+    "E": f"=D{{r}}*{DM}/C{{r}}",
+    "F": "=k_mm/d_mm",
+    "G": f"=IF(E{{r}}<=2300,64/E{{r}},0.11*(F{{r}}+68/E{{r}})^0.25)",
+    "H": f"=G{{r}}/{DM}*(B{{r}}*D{{r}}^2)/2",
+    "I": "=H{r}*L_m/1000",
+    "J": "=I{r}*1000/(B{r}*9.80665)",
+}
+numfmt = {
+    "A": "0",    "B": "0.00", "C": "0.0000E+00", "D": "0.000",
+    "E": "0",    "F": "0.00000", "G": "0.0000", "H": "0.0",
+    "I": "0.00", "J": "0.000",
+}
+
+for i in range(N_RES):
+    r = 5 + i                 # строка на листе «Расчёт»
+    sr = RES_ROW0 + i         # строка на листе «Свойства воды»
+    ws3.cell(row=r, column=1, value=WATER[i][0]).fill = FILL_T
+    for col in "ABCDEFGHIJ":
+        cell = ws3[f"{col}{r}"]
+        if col == "A":
+            continue  # уже записано
+        cell.value = formulas[col].format(r=r, sr=sr)
+    for col in "ABCDEFGHIJ":
+        cell = ws3[f"{col}{r}"]
+        cell.number_format = numfmt[col]
+        cell.alignment = C
+        cell.border = B_ALL
+
+tot = ws3.cell(row=5 + N_RES, column=1,
+               value="min/max Δp по диапазону")
+tot.font = F_NOTE
+ws3[f"I{5 + N_RES}"] = f'=IF(MAX(I5:I{4+N_RES})=MIN(I5:I{4+N_RES}),I5,"см. таблицу")'
+ws3[f"I{5 + N_RES}"].font = F_NOTE
+
+widths = {"A": 6, "B": 11, "C": 13, "D": 9, "E": 10, "F": 9,
+          "G": 11, "H": 12, "I": 12, "J": 13}
+for col, w in widths.items():
+    ws3.column_dimensions[col].width = w
+ws3.freeze_panes = "A5"
+
+# =================================================================== ЛИСТ 4
+# «Методика» — описание формул
+ws4 = wb.create_sheet("Методика")
+ws4["A1"] = "Методика расчёта"
+ws4["A1"].font = F_TITLE
+
+lines = [
+    "",
+    "1. Скорость потока:",
+    "   v = Q / (3600 · f),  где f = π·d²/4 — площадь сечения; d — внутренний диаметр, м",
+    "",
+    "2. Число Рейнольдса:",
+    "   Re = v · d / ν   (d — м; ν — кинематическая вязкость воды при данной температуре)",
+    "",
+    "3. Коэффициент гидравлического трения λ:",
+    "   • ламинарный режим (Re ≤ 2300):        λ = 64 / Re",
+    "   • турбулентный режим  (Re > 2300):     λ = 0.11 · (k/d + 68/Re)^0.25   (формула Альтшуля)",
+    "",
+    "4. Потери давления по Дарси-Вейсбаху (трения по длине):",
+    "   R  = λ · (1/d) · (ρ·v²)/2      [Па/м]  — удельная",
+    "   Δp = R · L                      [кПа]  — на участке",
+    "",
+    "5. Потеря напора:",
+    "   Δh = Δp / (ρ·g), g = 9.80665 м/с²   [м вод. ст.]",
+    "",
+    "Свойства воды: стандартные таблицы теплофизических свойств воды (IAPWS),",
+    "значения ρ и ν при атмосферном давлении; диапазон 5…80 °C с шагом 5 °C.",
+    "",
+    "Примечания:",
+    "• местные сопротивления (отводы, арматура) не учитываются — считается только трение по длине;",
+    "• при малых Re формула Альтшуля плавно переходит в зависимость для гладких труб (Блазиус);",
+    "• все вычисления — формулами Excel: изменение исходных данных на листе «Ввод»",
+    "  пересчитывает таблицу автоматически.",
+]
+for i, s in enumerate(lines):
+    cell = ws4.cell(row=2 + i, column=1, value=s if s else None)
+    if s.startswith(("1.", "2.", "3.", "4.", "5.")):
+        cell.font = Font(size=11, bold=True)
+    elif s:
+        cell.font = F_LABEL
+ws4.column_dimensions["A"].width = 100
+
+wb.save(OUT_FILE)
+print(f"OK: {OUT_FILE} создан (4 листа: Ввод, Свойства воды, Расчёт, Методика)")
+

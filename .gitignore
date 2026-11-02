@@ -1,0 +1,6 @@
+# Артефакты: пересоздаются из build_excel.py
+hydr_calc.xlsx
+
+# Служебные файлы
+__pycache__/
+*.pyc
