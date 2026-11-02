@@ -119,6 +119,8 @@ FLUID_PG = "ПГ 40%"
 rows = [
     ("Теплоноситель",                FLUID_W, "—",
      "выпадающий список: Вода или 40% раствор пропиленгликоля (защита ≈ −24 °C)"),
+    ("РЕЖИМ ЗАДАНИЯ", MODE_Q, "—",
+     "выберите из списка: задавать расход Q (м³/ч), расход Ql (л/мин) или скорость v"),
     ("Внутренний диаметр трубы d", 50.0, "мм",
      "внутренний (проходной) диаметр"),
     ("Эквивалентная шероховатость k", 0.1, "мм",
@@ -129,8 +131,6 @@ rows = [
      "используется, если режим = «Расход (л/мин)»; 1 л/мин = 0.06 м³/ч"),
     ("Скорость воды v", None, "м/с",
      "используется, если режим = «Скорость (v)»; при пустой ячейке задайте значение"),
-    ("РЕЖИМ ЗАДАНИЯ", MODE_Q, "—",
-     "выберите из списка: задавать расход Q (м³/ч), расход Ql (л/мин) или скорость v"),
     ("Длина участка L", 100.0, "м", "полная длина прямого участка"),
 ]
 # строки 3..9: теплоноситель, d, k, Q, v, режим, L
@@ -170,10 +170,10 @@ for rr in (12, 13):
     ws1[f"C{rr}"].border = B_ALL
     ws1[f"D{rr}"].font = F_UNIT
 
-# именованные диапазоны (строки 3..10: теплоноситель, d, k, Q, Ql, v, режим, L)
-for name, cell in (("Fluid", "$C$3"), ("d_mm", "$C$4"), ("k_mm", "$C$5"),
-                   ("Q_m3h", "$C$6"), ("Q_lmin", "$C$7"), ("v_ms", "$C$8"),
-                   ("Regim", "$C$9"), ("L_m", "$C$10"),
+# именованные диапазоны (строки 3..10: теплоноситель, РЕЖИМ, d, k, Q, Ql, v, L)
+for name, cell in (("Fluid", "$C$3"), ("Regim", "$C$4"), ("d_mm", "$C$5"),
+                   ("k_mm", "$C$6"), ("Q_m3h", "$C$7"), ("Q_lmin", "$C$8"),
+                   ("v_ms", "$C$9"), ("L_m", "$C$10"),
                    ("step_mm", "$C$24"), ("dT_K", "$C$25"), ("Tavg", "$C$26"),
                    ("step_i", "$C$27"), ("step_j", "$C$28"), ("step_f", "$C$29"),
                    ("Q_used", "$C$12"), ("v_used", "$C$13")):
@@ -184,7 +184,7 @@ dv_pos = DataValidation(type="decimal", operator="greaterThan", formula1="0",
                         allow_blank=False, showErrorMessage=True,
                         errorTitle="Ошибка ввода",
                         error="Значение должно быть положительным числом.")
-for addr in ("C4", "C6", "C7", "C8", "C10"):
+for addr in ("C5", "C7", "C8", "C9", "C10"):
     dv_pos.add(addr)
 ws1.add_data_validation(dv_pos)
 
@@ -192,7 +192,7 @@ dv_nonneg = DataValidation(type="decimal", operator="greaterThanOrEqual", formul
                            allow_blank=False, showErrorMessage=True,
                            errorTitle="Ошибка ввода",
                            error="Шероховатость не может быть отрицательной.")
-dv_nonneg.add("C5")
+dv_nonneg.add("C6")
 ws1.add_data_validation(dv_nonneg)
 
 dv_mode = DataValidation(type="list",
@@ -200,7 +200,7 @@ dv_mode = DataValidation(type="list",
                          allow_blank=False, showErrorMessage=True,
                          errorTitle="Ошибка режима",
                          error="Выберите вариант из списка.")
-dv_mode.add("C9")
+dv_mode.add("C4")
 ws1.add_data_validation(dv_mode)
 
 dv_fluid = DataValidation(type="list", formula1=f'"{FLUID_W},{FLUID_PG}"',
@@ -234,11 +234,11 @@ ws1.add_data_validation(dv_tavg)
 
 # подсветка неиспользуемой ячейки (серым)
 ws1.conditional_formatting.add(
-    "C6", FormulaRule(formula=[f'$C$9<>"{MODE_Q}"'], fill=FILL_OFF, font=F_OFF))
+    "C7", FormulaRule(formula=[f'$C$4<>"{MODE_Q}"'], fill=FILL_OFF, font=F_OFF))
 ws1.conditional_formatting.add(
-    "C7", FormulaRule(formula=[f'$C$9<>"{MODE_L}"'], fill=FILL_OFF, font=F_OFF))
+    "C8", FormulaRule(formula=[f'$C$4<>"{MODE_L}"'], fill=FILL_OFF, font=F_OFF))
 ws1.conditional_formatting.add(
-    "C8", FormulaRule(formula=[f'$C$9<>"{MODE_V}"'], fill=FILL_OFF, font=F_OFF))
+    "C9", FormulaRule(formula=[f'$C$4<>"{MODE_V}"'], fill=FILL_OFF, font=F_OFF))
 
 ws1["A15"] = "Примечания:"
 ws1["A16"] = "• жёлтые ячейки — редактируемые исходные данные;"
@@ -272,6 +272,8 @@ blk = [
     ("Уд. теплоотдача, на метр трубы", None, "Вт/м", "F / L"),
     ("Потеря напора h при Tср", None, "м вод. ст.",
      "h = lambda·L·v²/(2·d·g) при nu, lambda по Tср (Альтшуль/ламинарный)"),
+    ("Режим течения при Tср", None, "—",
+     "по числу Рейнольдса при свойствах Tср"),
 ]
 blk_row0 = 24
 for i, (label, val, unit, note) in enumerate(blk):
@@ -320,13 +322,15 @@ _nu = (f'(IF($C$3="{FLUID_PG}",{_interp("E")},'
 _re = f'(v_used*(d_mm/1000)/{_nu})'
 _lam = f'IF({_re}<=2300,64/{_re},0.11*((k_mm/d_mm)+68/{_re})^0.25)'
 ws1["C36"] = f'=IFERROR({_lam}*L_m*v_used^2/(2*(d_mm/1000)*9.80665),"н/д")'
+ws1["C37"] = f'=IFERROR(IF({_re}<=2300,"ламинарный","турбулентный"),"н/д")'
+ws1["C37"].font = F_INPUT
 
-for r in range(30, 37):
+for r in range(30, 38):
     ws1[f"C{r}"].alignment = C
     ws1[f"C{r}"].border = B_ALL
     ws1[f"C{r}"].number_format = {30: "0.00", 31: "0.0", 32: "0.0",
                                   33: "0", 34: "0.00", 35: "0.00",
-                                  36: "0.000"}[r]
+                                  36: "0.000", 37: "@"}[r]
 
 ws1.column_dimensions["A"].width = 32
 ws1.column_dimensions["C"].width = 12
@@ -400,7 +404,7 @@ ws3 = wb.create_sheet("Расчёт")
 
 ws3["A1"] = "Потери давления на участке трубы (вода) — расчёт по температурам"
 ws3["A1"].font = F_TITLE
-ws3.merge_cells("A1:O1")
+ws3.merge_cells("A1:P1")
 
 ws3["A2"] = ('=" Исходные данные:  теплоноситель: "&Fluid&";  d = "&d_mm&" мм;   '
              'k = "&k_mm&" мм;   режим: "&Regim'
@@ -415,6 +419,7 @@ props = [
     ("lambda", "—"),    ("R", "Па/м"),      ("dP", "кПа"),   ("dH", "м вод. ст."),
     ("lam_cw1", "—"),   ("lam_cw2", "—"),   ("lam_cw3", "—"), ("d_lam", "%"),
     ("d_R", "Па/м"),
+    ("f_mode", "—"),
 ]
 # строка 3 — названия, строка 4 — единицы
 for j, (name, unit) in enumerate(props, start=1):
@@ -431,7 +436,8 @@ titles = ["T", "Плотность ρ", "Вязкость ν", "Скорость
           "Потеря давления Δp", "Потеря напора Δh",
           "λ Колбрука (ит. 1)", "λ Колбрука (ит. 2)", "λ Колбрука (ит. 3)",
           "Разность λ (Альтшуль vs Колбрук)",
-          "Δ R (Альтшуль − Колбрук)"]
+          "Δ R (Альтшуль − Колбрук)",
+          "Режим течения"]
 for j, t in enumerate(titles, start=1):
     ws3.cell(row=3, column=j, value=t).font = F_HEAD
 
@@ -459,25 +465,27 @@ formulas = {
     "N": '=IF(M{r}="","",(G{r}-M{r})/M{r})',
     # разность удельных потерь в Па/м: Альтшуль минус Колбрук
     "O": f'=IF(M{{r}}="","",(G{{r}}-M{{r}})/{DM}*(B{{r}}*D{{r}}^2)/2)',
+    # пометка режима течения
+    "P": '=IF(E{r}="","",IF(E{r}<=2300,"ламинарный","турбулентный"))',
 }
 numfmt = {
     "A": "0",    "B": "0.00", "C": "0.0000E+00", "D": "0.000",
     "E": "0",    "F": "0.00000", "G": "0.0000", "H": "0",
     "I": "0.00", "J": "0.000", "K": "0.0000", "L": "0.0000",
     "M": "0.0000", "N": "0.0%",
-    "O": "0",
+    "O": "0", "P": "@",
 }
 
 for i in range(N_RES):
     r = 5 + i                 # строка на листе «Расчёт»
     sr = RES_ROW0 + i         # строка на листе «Свойства воды»
     ws3.cell(row=r, column=1, value=TEMP_LIST[i]).fill = FILL_T
-    for col in "ABCDEFGHIJKLMNO":
+    for col in "ABCDEFGHIJKLMNOP":
         cell = ws3[f"{col}{r}"]
         if col == "A":
             continue  # уже записано
         cell.value = formulas[col].format(r=r, sr=sr)
-    for col in "ABCDEFGHIJKLMNO":
+    for col in "ABCDEFGHIJKLMNOP":
         cell = ws3[f"{col}{r}"]
         cell.number_format = numfmt[col]
         cell.alignment = C
@@ -487,6 +495,12 @@ for i in range(N_RES):
 for c in ("K", "L", "M"):
     ws3.column_dimensions[c].hidden = True
 
+# подсветка ламинарных строк (Re <= 2300) голубым
+FILL_LAM = PatternFill("solid", fgColor="CCE5FF")
+ws3.conditional_formatting.add(
+    "A5:P25", FormulaRule(formula=['AND($E5<>"",$E5<=2300)'],
+                          fill=FILL_LAM))
+
 tot = ws3.cell(row=5 + N_RES, column=1,
                value="min/max Δp по диапазону")
 tot.font = F_NOTE
@@ -495,7 +509,7 @@ ws3[f"I{5 + N_RES}"].font = F_NOTE
 
 widths = {"A": 6, "B": 11, "C": 13, "D": 9, "E": 10, "F": 9,
           "G": 11, "H": 12, "I": 12, "J": 13,
-          "K": 12, "L": 12, "M": 12, "N": 13, "O": 14}
+          "K": 12, "L": 12, "M": 12, "N": 13, "O": 14, "P": 13}
 for col, w in widths.items():
     ws3.column_dimensions[col].width = w
 ws3.freeze_panes = "A5"
